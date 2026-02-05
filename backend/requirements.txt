@@ -7,3 +7,4 @@ cerebras-cloud-sdk>=1.0.0
 python-dotenv>=1.0.0
 django-cors-headers>=4.3.0
 dj-database-url>=2.1.0
+gunicorn>=21.2.0
