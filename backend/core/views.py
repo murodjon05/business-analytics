@@ -9,7 +9,7 @@ from .serializers import (
     AnalysisResultSerializer, 
     AnalysisRequestSerializer
 )
-from .tasks import run_analysis_chain
+from .services.ai_analyzer import AIAnalyzer
 from .auth import generate_token, require_api_auth
 
 logger = logging.getLogger(__name__)
@@ -41,8 +41,7 @@ def analyze_erp_data(request):
     """
     POST /api/analyze/
     
-    Accepts ERP data and triggers async analysis.
-    Returns task ID for polling.
+    Accepts ERP data and runs analysis synchronously.
     """
     serializer = AnalysisRequestSerializer(data=request.data)
     
@@ -72,22 +71,34 @@ def analyze_erp_data(request):
             status='pending',
             name=serializer.validated_data.get('name', '')
         )
-        
-        # Trigger async analysis
-        task = run_analysis_chain.delay(snapshot.id)
-        
-        logger.info(f"Analysis task {task.id} created for snapshot {snapshot.id}")
-        
+
+        analysis.status = 'processing'
+        analysis.save()
+
+        analyzer = AIAnalyzer()
+        results = analyzer.run_full_analysis(snapshot.raw_data)
+
+        analysis.cleaning_analysis = results['cleaning_analysis']
+        analysis.business_strategy = results['business_strategy']
+        analysis.erp_actions = results['erp_actions']
+        analysis.status = 'completed'
+        analysis.save()
+
         return Response({
-            'message': 'Analysis started successfully',
-            'task_id': task.id,
+            'message': 'Analysis completed successfully',
             'analysis_id': analysis.id,
             'snapshot_id': snapshot.id,
-            'status': 'pending'
-        }, status=status.HTTP_202_ACCEPTED)
+            'status': 'completed'
+        }, status=status.HTTP_200_OK)
         
     except Exception as e:
         logger.error(f"Error creating analysis: {e}")
+        try:
+            analysis.status = 'failed'
+            analysis.error_message = str(e)
+            analysis.save()
+        except Exception:
+            pass
         return Response(
             {'error': 'Failed to start analysis', 'details': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

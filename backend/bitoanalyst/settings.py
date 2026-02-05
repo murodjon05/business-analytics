@@ -107,13 +107,5 @@ ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '$Businessadmin')
 API_TOKEN_SECRET = os.getenv('API_TOKEN_SECRET', SECRET_KEY)
 AUTH_TOKEN_TTL_SECONDS = int(os.getenv('AUTH_TOKEN_TTL_SECONDS', '21600'))
 
-# Celery Configuration
-CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
-
 # Cerebras API Key
 CEREBRAS_API_KEY = os.getenv('CEREBRAS_API_KEY')
