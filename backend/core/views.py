@@ -15,6 +15,11 @@ from .auth import generate_token, require_api_auth
 logger = logging.getLogger(__name__)
 
 
+@api_view(['GET'])
+def health(request):
+    return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 def login(request):
     """
