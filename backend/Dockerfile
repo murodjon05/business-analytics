@@ -15,5 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Run Django with gunicorn
-CMD ["sh", "-c", "gunicorn bitoanalyst.wsgi:application --bind 0.0.0.0:${PORT:-8000}"]
+# Run migrations then start gunicorn (demo-friendly)
+CMD ["sh", "-c", "python manage.py migrate && gunicorn bitoanalyst.wsgi:application --bind 0.0.0.0:${PORT:-8000}"]
