@@ -11,7 +11,7 @@ class AIAnalyzer:
     
     def __init__(self):
         self.client = Cerebras(api_key=settings.CEREBRAS_API_KEY)
-        self.model = "llama-3.1-8b"
+        self.model = "gpt-oss-120b"
 
     def _normalize_erp_data(self, erp_data):
         """Ensure ERP data is a dict for prompting; wrap non-dicts."""
