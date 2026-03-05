@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 from cerebras.cloud.sdk import Cerebras
@@ -7,57 +6,187 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 class AIAnalyzer:
-    """Service for analyzing ERP data using Cerebras LLM."""
+    """Service for analyzing business data using Cerebras LLM."""
     
     def __init__(self):
         self.client = Cerebras(api_key=settings.CEREBRAS_API_KEY)
         self.model = "gpt-oss-120b"
 
-    def _normalize_erp_data(self, erp_data):
-        """Ensure ERP data is a dict for prompting; wrap non-dicts."""
-        if isinstance(erp_data, dict):
-            return erp_data
-        return {"raw_data": erp_data}
+    def _normalize_data(self, data):
+        """Ensure data is a dict for prompting; wrap non-dicts."""
+        if isinstance(data, dict):
+            return self._aggregate_large_data(data)
+        return {"raw_data": data}
     
-    def _calculate_ratios(self, erp_data):
-        """Pre-calculate key business ratios from ERP data."""
-        if not isinstance(erp_data, dict):
+    def _aggregate_large_data(self, data, max_items=500):
+        """Aggregate large arrays to prevent LLM token limits."""
+        if not isinstance(data, dict):
+            return data
+        
+        aggregated = {}
+        for key, value in data.items():
+            if isinstance(value, list) and len(value) > max_items:
+                if len(value) > 0 and isinstance(value[0], dict):
+                    sample = value[:max_items]
+                    aggregated[key] = {
+                        "_sample": sample,
+                        "_total_count": len(value),
+                        "_note": f"Showing {max_items} of {len(value)} rows. Data aggregated for analysis."
+                    }
+                else:
+                    aggregated[key] = value[:max_items]
+            else:
+                aggregated[key] = value
+        
+        return aggregated
+    
+    def _infer_schema(self, data):
+        """Infer the schema structure from the uploaded data."""
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                return self._infer_schema({"rows": data})
+            return {"type": "array", "fields": []}
+        if not isinstance(data, dict):
+            return {"type": "unknown", "fields": []}
+        
+        schema = {
+            "top_level_keys": list(data.keys()),
+            "fields": {},
+            "numeric_fields": [],
+            "categorical_fields": [],
+            "detected_categories": []
+        }
+        
+        def analyze_value(key, value, path=""):
+            field_path = f"{path}.{key}" if path else key
+            
+            if isinstance(value, dict):
+                schema["fields"][field_path] = {
+                    "type": "object",
+                    "children": {}
+                }
+                for child_key, child_value in value.items():
+                    analyze_value(child_key, child_value, field_path)
+            elif isinstance(value, list):
+                schema["fields"][field_path] = {
+                    "type": "array",
+                    "length": len(value)
+                }
+                if len(value) > 0:
+                    if isinstance(value[0], dict):
+                        schema["fields"][field_path]["item_type"] = "object"
+                        for child_key in value[0].keys():
+                            sample_value = value[0][child_key]
+                            analyze_value(child_key, sample_value, field_path)
+                    elif isinstance(value[0], (int, float, str)):
+                        schema["fields"][field_path]["sample_value"] = value[0]
+            elif isinstance(value, (int, float)):
+                schema["fields"][field_path] = {
+                    "type": "number",
+                    "value": value
+                }
+                schema["numeric_fields"].append(field_path)
+            elif isinstance(value, str):
+                schema["fields"][field_path] = {
+                    "type": "string",
+                    "value": value
+                }
+                if '%' in value:
+                    try:
+                        schema["fields"][field_path]["parsed_number"] = float(value.replace('%', ''))
+                        schema["numeric_fields"].append(field_path)
+                    except:
+                        pass
+            elif isinstance(value, bool):
+                schema["fields"][field_path] = {
+                    "type": "boolean",
+                    "value": value
+                }
+        
+        for key, value in data.items():
+            analyze_value(key, value)
+        
+        for key in data.keys():
+            if isinstance(data[key], dict):
+                schema["detected_categories"].append(key)
+        
+        return schema
+    
+    def _calculate_dynamic_ratios(self, data, schema):
+        """Dynamically calculate ratios based on detected numeric fields."""
+        if not isinstance(data, dict):
             return {}
-        sales = erp_data.get('sales', {})
-        warehouse = erp_data.get('warehouse', {})
-        finance = erp_data.get('finance', {})
-        crm = erp_data.get('crm', {})
         
         ratios = {}
         
-        # Sales ratios
-        total_orders = sales.get('total_orders', 0)
-        cancelled = sales.get('cancelled', 0)
-        ratios['cancellation_rate'] = (cancelled / total_orders * 100) if total_orders > 0 else 0
-        ratios['aov'] = sales.get('aov', 0)
-        repeat_str = sales.get('repeat', '0%')
-        ratios['repeat_rate'] = float(repeat_str.replace('%', '')) if isinstance(repeat_str, str) else repeat_str
+        def get_numeric_value(obj, path):
+            keys = path.split('.')
+            value = obj
+            for key in keys:
+                if isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value.replace('%', '').replace(',', ''))
+                except:
+                    return None
+            return None
         
-        # Warehouse ratios
-        skus = warehouse.get('skus', 0)
-        out_of_stock = warehouse.get('out_of_stock', 0)
-        dead_stock = warehouse.get('dead_stock', 0)
-        ratios['stockout_rate'] = (out_of_stock / skus * 100) if skus > 0 else 0
-        ratios['dead_stock_rate'] = (dead_stock / skus * 100) if skus > 0 else 0
+        numeric_fields = schema.get("numeric_fields", [])
         
-        # Finance ratios
-        revenue = finance.get('revenue', 0)
-        expenses = finance.get('expenses', 0)
-        profit = finance.get('profit', 0)
-        ratios['net_profit_margin'] = (profit / revenue * 100) if revenue > 0 else 0
-        ratios['expense_ratio'] = (expenses / revenue * 100) if revenue > 0 else 0
+        for i, field_a in enumerate(numeric_fields):
+            val_a = get_numeric_value(data, field_a)
+            if val_a is None or val_a == 0:
+                continue
+            
+            for field_b in numeric_fields[i+1:]:
+                val_b = get_numeric_value(data, field_b)
+                if val_b is None or val_b == 0:
+                    continue
+                
+                ratio_name = f"{field_a}_to_{field_b}_ratio"
+                ratios[ratio_name] = (val_b / val_a) * 100 if val_a != 0 else 0
         
-        # CRM ratios
-        leads = crm.get('leads', 0)
-        converted = crm.get('converted', 0)
-        lost = crm.get('lost', 0)
-        ratios['conversion_rate'] = (converted / leads * 100) if leads > 0 else 0
-        ratios['loss_rate'] = (lost / leads * 100) if leads > 0 else 0
+        for key, value in data.items():
+            if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+                all_numeric = {}
+                for row in value:
+                    if not isinstance(row, dict):
+                        continue
+                    for field_name, field_value in row.items():
+                        if isinstance(field_value, (int, float)):
+                            if field_name not in all_numeric:
+                                all_numeric[field_name] = []
+                            all_numeric[field_name].append(float(field_value))
+                
+                for field_name, values in all_numeric.items():
+                    if len(values) > 0:
+                        total = sum(values)
+                        avg = total / len(values)
+                        ratios[f"{key}.{field_name}.sum"] = total
+                        ratios[f"{key}.{field_name}.avg"] = avg
+                        ratios[f"{key}.{field_name}.count"] = len(values)
+        
+        def calculate_totals(obj, prefix=""):
+            totals = {}
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    field_name = f"{prefix}.{key}" if prefix else key
+                    if isinstance(value, (int, float)):
+                        totals[field_name] = value
+                    elif isinstance(value, dict):
+                        nested = calculate_totals(value, field_name)
+                        for k, v in nested.items():
+                            totals[k] = v
+            return totals
+        
+        totals = calculate_totals(data)
+        if totals:
+            ratios["totals"] = totals
         
         return ratios
     
@@ -79,7 +208,6 @@ class AIAnalyzer:
             logger.info(f"Response type: {type(response)}")
             logger.info(f"Response: {response}")
             
-            # Handle the response properly
             if hasattr(response, 'choices') and len(response.choices) > 0:
                 content = response.choices[0].message.content
                 logger.info(f"Content: {content[:200]}...")
@@ -90,13 +218,11 @@ class AIAnalyzer:
             if not content or content.strip() == '':
                 raise ValueError("Empty response from Cerebras API")
             
-            # Try to parse as JSON
             try:
                 return json.loads(content)
             except json.JSONDecodeError as e:
                 logger.error(f"JSON decode error: {e}")
                 logger.error(f"Content: {content}")
-                # Try to extract JSON if wrapped in markdown code blocks
                 if '```json' in content:
                     json_str = content.split('```json')[1].split('```')[0].strip()
                     return json.loads(json_str)
@@ -109,82 +235,52 @@ class AIAnalyzer:
             logger.error(f"Error calling LLM: {e}")
             raise
     
-    def analyze_data_quality(self, erp_data):
-        """
-        Analyze data quality and detect abnormal ratios.
-        Returns structured JSON with red flags and insights.
-        """
-        normalized_data = self._normalize_erp_data(erp_data)
-        ratios = self._calculate_ratios(normalized_data)
-        
-        system_prompt = """You are an expert ERP data analyst. Analyze the provided ERP data and ratios to identify data quality issues, anomalies, and business red flags. The data may be provided in standard ERP modules or in arbitrary metric tables; make reasonable inferences and note assumptions.
-
-Respond ONLY with a valid JSON object in this exact format:
-{
-    "red_flags": [
-        {
-            "severity": "high|medium|low",
-            "category": "sales|warehouse|finance|crm|operations|general",
-            "metric": "metric name",
-            "value": numeric_value,
-            "threshold": benchmark_value,
-            "description": "Clear explanation of the issue"
-        }
-    ],
-    "key_insights": [
-        {
-            "category": "sales|warehouse|finance|crm|operations|general",
-            "title": "Brief insight title",
-            "description": "Detailed insight description",
-            "impact": "high|medium|low"
-        }
-    ],
-    "data_quality_score": 0-100,
-    "summary": "Brief overall assessment"
-}
-
-Severity thresholds:
-- Cancellation rate > 15% = high, > 10% = medium
-- Stockout rate > 10% = high, > 5% = medium
-- Dead stock rate > 20% = high, > 15% = medium
-- Net profit margin < 5% = high, < 10% = medium
-- Conversion rate < 15% = high, < 20% = medium"""
-        
-        user_prompt = f"""Analyze this ERP data and pre-calculated ratios:
-
-Raw Data:
-{json.dumps(normalized_data, indent=2)}
-
-Calculated Ratios:
-{json.dumps(ratios, indent=2)}
-
-Provide your analysis as JSON."""
-        
-        return self._call_llm(system_prompt, user_prompt)
-    
-    def generate_business_strategy(self, erp_data, cleaning_insights):
+    def generate_business_strategy(self, data):
         """
         Generate business strategy based on data analysis.
-        Returns top 5 problems with root causes and actions.
+        Returns top problems with root causes and actions.
         """
-        normalized_data = self._normalize_erp_data(erp_data)
+        schema = self._infer_schema(data)
+        dynamic_ratios = self._calculate_dynamic_ratios(data, schema)
+        
+        normalized_data = self._normalize_data(data)
 
-        system_prompt = """You are a senior business strategist. Based on the ERP data and data quality insights, identify the top 5 business problems, their root causes, and recommended actions. The ERP data may be a generic metric table; infer business context as needed and state assumptions.
+        system_prompt = """You are a senior business strategist. Analyze the provided business data to identify key problems, opportunities, and recommend actionable strategies.
+
+The data schema is dynamic - users can upload any JSON/CSV dataset. You must:
+1. Infer the business context from the field names and values provided
+2. Identify the most important metrics and their relationships
+3. Calculate meaningful ratios and comparisons on your own
+4. Provide business insights relevant to the detected data categories
+5. ALWAYS include key_metrics - extract all numeric fields from the data as key_metrics
 
 Respond ONLY with a valid JSON object in this exact format:
 {
     "executive_summary": "2-3 sentence summary of overall business health",
+    "detected_data_types": ["list of detected business areas like sales, marketing, inventory, etc."],
+    "key_metrics": {
+        "metric_name": numeric_value,
+        "another_metric": numeric_value
+    },
     "top_problems": [
         {
             "rank": 1-5,
             "problem": "Clear problem statement",
-            "category": "sales|warehouse|finance|crm|operations|general",
+            "category": "inferred business category",
             "root_cause": "Detailed explanation of why this is happening",
-            "financial_impact": "Estimated monthly/quarterly impact in currency",
+            "financial_impact": "Estimated impact in currency or percentage",
             "recommended_action": "Specific, actionable step",
             "action_priority": "critical|high|medium|low",
             "estimated_effort": "hours|days|weeks",
             "expected_roi": "percentage or currency estimate"
+        }
+    ],
+    "opportunities": [
+        {
+            "title": "Opportunity title",
+            "description": "Detailed description",
+            "potential_impact": "Estimated benefit",
+            "effort_required": "low|medium|high"
         }
     ],
     "quick_wins": [
@@ -204,106 +300,29 @@ Respond ONLY with a valid JSON object in this exact format:
     ]
 }"""
         
-        user_prompt = f"""Generate business strategy based on:
+        user_prompt = f"""Analyze this business data and provide strategic insights:
 
-ERP Data:
+Data Schema:
+{json.dumps(schema, indent=2)}
+
+Raw Data:
 {json.dumps(normalized_data, indent=2)}
 
-Data Quality Insights:
-{json.dumps(cleaning_insights, indent=2)}
+Calculated Ratios:
+{json.dumps(dynamic_ratios, indent=2)}
 
-Provide your strategy as JSON."""
+IMPORTANT: Include key_metrics with ALL numeric fields from the data. This is required for the dashboard to display metrics.
+
+Provide your strategy as JSON. Make reasonable inferences about business context from field names and values."""
         
         return self._call_llm(system_prompt, user_prompt, temperature=0.4)
     
-    def generate_erp_config(self, business_strategy):
-        """
-        Generate specific Bito ERP module configuration changes.
-        Returns actionable ERP settings grouped by module.
-        """
-        system_prompt = """You are a Bito ERP configuration expert. Based on the business strategy analysis, suggest specific ERP module settings and configurations to address the identified problems.
-
-Respond ONLY with a valid JSON object in this exact format:
-{
-    "configuration_summary": "Overview of recommended changes",
-    "modules": {
-        "sales": {
-            "priority": "high|medium|low",
-            "configurations": [
-                {
-                    "setting": "Specific setting name/path",
-                    "current_value": "Current setting (estimate)",
-                    "recommended_value": "New setting value",
-                    "rationale": "Why this change helps",
-                    "implementation_difficulty": "easy|medium|hard"
-                }
-            ],
-            "automations": [
-                {
-                    "automation": "Automation name",
-                    "trigger": "What triggers it",
-                    "action": "What it does",
-                    "benefit": "Expected benefit"
-                }
-            ]
-        },
-        "warehouse": {
-            "priority": "high|medium|low",
-            "configurations": [...],
-            "automations": [...]
-        },
-        "finance": {
-            "priority": "high|medium|low",
-            "configurations": [...],
-            "automations": [...]
-        },
-        "crm": {
-            "priority": "high|medium|low",
-            "configurations": [...],
-            "automations": [...]
-        }
-    },
-    "integration_changes": [
-        {
-            "integration": "Integration name",
-            "change": "Description of change",
-            "modules_affected": ["module1", "module2"],
-            "impact": "Description of impact"
-        }
-    ],
-    "implementation_order": [
-        {
-            "step": 1,
-            "module": "module name",
-            "action": "What to implement",
-            "estimated_time": "hours/days",
-            "prerequisites": ["prereq1", "prereq2"]
-        }
-    ]
-}"""
-        
-        user_prompt = f"""Generate Bito ERP configuration recommendations based on:
-
-Business Strategy:
-{json.dumps(business_strategy, indent=2)}
-
-Provide configuration as JSON."""
-        
-        return self._call_llm(system_prompt, user_prompt, temperature=0.3)
-    
-    def run_full_analysis(self, erp_data):
+    def run_full_analysis(self, data):
         """Run the complete AI analysis chain."""
-        logger.info("Starting data quality analysis...")
-        cleaning_analysis = self.analyze_data_quality(erp_data)
-
         logger.info("Generating business strategy...")
-        business_strategy = self.generate_business_strategy(erp_data, cleaning_analysis)
-
-        logger.info("Generating ERP configuration...")
-        erp_actions = self.generate_erp_config(business_strategy)
+        business_strategy = self.generate_business_strategy(data)
 
         return {
-            'cleaning_analysis': cleaning_analysis,
             'business_strategy': business_strategy,
-            'erp_actions': erp_actions
+            'schema_info': self._infer_schema(self._normalize_data(data))
         }
