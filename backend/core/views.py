@@ -52,15 +52,18 @@ def analyze_erp_data(request):
         )
     
     try:
-        # Create ERP snapshot with flexible schema support
-        if 'raw_data' in serializer.validated_data:
-            erp_data = serializer.validated_data['raw_data']
+        # Handle flexible data format
+        validated = serializer.validated_data
+        if 'payload' in validated:
+            erp_data = validated['payload']
+        elif 'raw_data' in validated:
+            erp_data = validated['raw_data']
         else:
             erp_data = {
-                'sales': serializer.validated_data.get('sales', {}),
-                'warehouse': serializer.validated_data.get('warehouse', {}),
-                'finance': serializer.validated_data.get('finance', {}),
-                'crm': serializer.validated_data.get('crm', {}),
+                'sales': validated.get('sales', {}),
+                'warehouse': validated.get('warehouse', {}),
+                'finance': validated.get('finance', {}),
+                'crm': validated.get('crm', {}),
             }
         
         snapshot = ErpSnapshot.objects.create(raw_data=erp_data)
@@ -78,9 +81,7 @@ def analyze_erp_data(request):
         analyzer = AIAnalyzer()
         results = analyzer.run_full_analysis(snapshot.raw_data)
 
-        analysis.cleaning_analysis = results['cleaning_analysis']
         analysis.business_strategy = results['business_strategy']
-        analysis.erp_actions = results['erp_actions']
         analysis.status = 'completed'
         analysis.save()
 

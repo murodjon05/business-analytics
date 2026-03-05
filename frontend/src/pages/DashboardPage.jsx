@@ -5,22 +5,19 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
-  ClipboardCheck,
   Briefcase,
-  Settings2,
   CalendarClock,
+  BarChart3,
 } from 'lucide-react'
 import { getAnalysisResult } from '../services/api'
-import DataHealthTab from '../components/DataHealthTab'
 import StrategyTab from '../components/StrategyTab'
-import BitoActionsTab from '../components/BitoActionsTab'
 
 const DashboardPage = () => {
   const { analysisId } = useParams()
   const [analysis, setAnalysis] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeTab, setActiveTab] = useState('health')
+  const [activeTab, setActiveTab] = useState('strategy')
   const [pollingPaused, setPollingPaused] = useState(false)
   const [pollingMessage, setPollingMessage] = useState(null)
   const pollAttempts = useRef(0)
@@ -116,7 +113,9 @@ const DashboardPage = () => {
   const isProcessing = analysis.status === 'pending' || analysis.status === 'processing'
   const isCompleted = analysis.status === 'completed'
   const isFailed = analysis.status === 'failed'
-  const dataQualityScore = analysis.cleaning_analysis?.data_quality_score
+  const businessStrategy = analysis.business_strategy || {}
+  const detectedDataTypes = businessStrategy?.detected_data_types || []
+  const keyMetrics = businessStrategy?.key_metrics || {}
 
   return (
     <div className="space-y-8">
@@ -131,7 +130,7 @@ const DashboardPage = () => {
               {analysis.name ? analysis.name : `Analysis #${analysis.id}`}
             </h2>
             <p className="text-ink-500 text-sm">
-              #{analysis.id} · Review insights, strategy, and ERP actions.
+              #{analysis.id} · AI-powered business insights
             </p>
           </div>
         </div>
@@ -164,11 +163,11 @@ const DashboardPage = () => {
           <p className="text-xs text-ink-500 mt-1">Snapshot #{analysis.erp_snapshot?.id}</p>
         </div>
         <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-soft">
-          <p className="text-xs text-ink-500 uppercase tracking-widest">Data quality</p>
+          <p className="text-xs text-ink-500 uppercase tracking-widest">Data types detected</p>
           <p className="text-lg font-semibold text-ink-900 mt-2">
-            {dataQualityScore !== undefined ? `${dataQualityScore}/100` : 'Pending'}
+            {detectedDataTypes.length > 0 ? detectedDataTypes.join(', ') : 'Analyzing...'}
           </p>
-          <p className="text-xs text-ink-500 mt-1">AI validation summary</p>
+          <p className="text-xs text-ink-500 mt-1">From your dataset</p>
         </div>
         <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-soft">
           <p className="text-xs text-ink-500 uppercase tracking-widest">Created</p>
@@ -179,6 +178,28 @@ const DashboardPage = () => {
           <p className="text-xs text-ink-500 mt-1">Local time</p>
         </div>
       </section>
+
+      {Object.keys(keyMetrics).length > 0 && !isProcessing && (
+        <section className="bg-white rounded-2xl shadow-soft border border-ink-100 p-5">
+          <h3 className="text-sm font-semibold text-ink-900 mb-4 flex items-center">
+            <BarChart3 className="h-4 w-4 mr-2" />
+            Key Metrics
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {Object.entries(keyMetrics)
+              .filter(([key, value]) => value !== null && value !== undefined && typeof value !== 'object')
+              .slice(0, 8)
+              .map(([key, value], index) => (
+                <div key={index} className="bg-ink-50 rounded-lg p-3">
+                  <p className="text-xs text-ink-500 capitalize">{String(key).replace(/_/g, ' ')}</p>
+                  <p className="text-lg font-semibold text-ink-900">
+                    {typeof value === 'number' ? value.toLocaleString() : String(value)}
+                  </p>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
 
       {pollingMessage && (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between gap-3">
@@ -203,24 +224,17 @@ const DashboardPage = () => {
       <section className="bg-white rounded-3xl shadow-soft border border-ink-100">
         <div className="border-b border-ink-100">
           <nav className="flex flex-col md:flex-row">
-            {[
-              { id: 'health', label: 'Data health', icon: <ClipboardCheck className="h-4 w-4" /> },
-              { id: 'strategy', label: 'Business strategy', icon: <Briefcase className="h-4 w-4" /> },
-              { id: 'actions', label: 'ERP actions', icon: <Settings2 className="h-4 w-4" /> },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition border-b-2 ${
-                  activeTab === tab.id
-                    ? 'border-ink-900 text-ink-900'
-                    : 'border-transparent text-ink-500 hover:text-ink-800'
-                }`}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            ))}
+            <button
+              onClick={() => setActiveTab('strategy')}
+              className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition border-b-2 ${
+                activeTab === 'strategy'
+                  ? 'border-ink-900 text-ink-900'
+                  : 'border-transparent text-ink-500 hover:text-ink-800'
+              }`}
+            >
+              <Briefcase className="h-4 w-4" />
+              Business Strategy
+            </button>
           </nav>
         </div>
 
@@ -228,15 +242,21 @@ const DashboardPage = () => {
           {isProcessing ? (
             <div className="flex flex-col items-center justify-center py-16">
               <Loader2 className="h-12 w-12 animate-spin text-primary-600 mb-4" />
-              <p className="text-lg text-ink-600">AI is analyzing your ERP data...</p>
+              <p className="text-lg text-ink-600">AI is analyzing your data...</p>
               <p className="text-sm text-ink-500 mt-2">This may take 30-60 seconds</p>
             </div>
-          ) : (
+          ) : isFailed ? (
+            <div className="text-center py-12 text-rose-600">
+              Analysis failed. Please try again.
+            </div>
+          ) : businessStrategy && Object.keys(businessStrategy).length > 0 ? (
             <>
-              {activeTab === 'health' && <DataHealthTab data={analysis.cleaning_analysis} />}
-              {activeTab === 'strategy' && <StrategyTab data={analysis.business_strategy} />}
-              {activeTab === 'actions' && <BitoActionsTab data={analysis.erp_actions} />}
+              {activeTab === 'strategy' && <StrategyTab data={businessStrategy} />}
             </>
+          ) : (
+            <div className="text-center py-12 text-ink-500">
+              No analysis results available.
+            </div>
           )}
         </div>
       </section>

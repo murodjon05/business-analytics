@@ -1,4 +1,4 @@
-import { Target, Lightbulb, Clock, DollarSign, TrendingUp } from 'lucide-react'
+import { Target, Lightbulb, Clock, DollarSign, TrendingUp, Zap } from 'lucide-react'
 
 const StrategyTab = ({ data }) => {
   if (!data || Object.keys(data).length === 0) {
@@ -10,7 +10,9 @@ const StrategyTab = ({ data }) => {
   }
 
   const executiveSummary = data.executive_summary || ''
+  const detectedDataTypes = data.detected_data_types || []
   const topProblems = data.top_problems || []
+  const opportunities = data.opportunities || []
   const quickWins = data.quick_wins || []
   const strategicInitiatives = data.strategic_initiatives || []
 
@@ -22,6 +24,19 @@ const StrategyTab = ({ data }) => {
         return 'bg-orange-100 text-orange-800'
       case 'medium':
         return 'bg-yellow-100 text-yellow-800'
+      default:
+        return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  const getEffortClass = (effort) => {
+    switch (effort?.toLowerCase()) {
+      case 'high':
+        return 'bg-red-100 text-red-800'
+      case 'medium':
+        return 'bg-yellow-100 text-yellow-800'
+      case 'low':
+        return 'bg-green-100 text-green-800'
       default:
         return 'bg-gray-100 text-gray-800'
     }
@@ -40,12 +55,21 @@ const StrategyTab = ({ data }) => {
         </div>
       )}
 
+      {/* Detected Data Types */}
+      {detectedDataTypes.length > 0 && (
+        <div className="bg-ink-50 rounded-lg p-4">
+          <p className="text-sm text-ink-600">
+            <strong>Data Categories Detected:</strong> {detectedDataTypes.join(', ')}
+          </p>
+        </div>
+      )}
+
       {/* Top Problems Table */}
       {topProblems.length > 0 && (
         <div>
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
             <TrendingUp className="h-5 w-5 text-primary-600 mr-2" />
-            Top 5 Problems & Actions
+            Top Problems & Actions
           </h3>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -97,6 +121,32 @@ const StrategyTab = ({ data }) => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Opportunities */}
+      {opportunities.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <Zap className="h-5 w-5 text-purple-600 mr-2" />
+            Opportunities
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {opportunities.map((opp, index) => (
+              <div key={index} className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <h4 className="font-medium text-gray-900 mb-2">{opp.title}</h4>
+                <p className="text-sm text-gray-700 mb-3">{opp.description}</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-purple-700">
+                    <strong>Impact:</strong> {opp.potential_impact}
+                  </span>
+                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${getEffortClass(opp.effort_required)}`}>
+                    {opp.effort_required} effort
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
