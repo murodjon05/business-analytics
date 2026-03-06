@@ -1,6 +1,7 @@
 .env
 .env.*
 .idea/
+.vscode/
 frontend/.env
 frontend/.env.*
 backend/.env
